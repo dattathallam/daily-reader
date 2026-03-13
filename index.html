@@ -155,6 +155,7 @@
     #setupScreen {
       align-items: center; justify-content: center;
       padding: 40px 28px; text-align: center; gap: 18px;
+      overflow-y: auto;
     }
     .setup-emoji { font-size: 68px; line-height: 1; }
     .setup-title { font-size: 28px; font-weight: 800; }
@@ -170,6 +171,23 @@
       padding: 8px; border-radius: 8px;
     }
     .notif-hint:active { background: rgba(255,255,255,.06); }
+    .continue-card {
+      width: 100%; max-width: 280px;
+      background: var(--surface2);
+      border: 1px solid rgba(108,99,255,.3);
+      border-radius: 14px; padding: 14px 16px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .continue-meta { font-size: 11px; color: var(--text-muted); }
+    .or-divider {
+      display: flex; align-items: center; gap: 10px;
+      width: 100%; max-width: 280px;
+      color: var(--text-muted); font-size: 12px;
+    }
+    .or-divider::before, .or-divider::after {
+      content: ''; flex: 1; height: 1px;
+      background: rgba(255,255,255,.08);
+    }
 
     /* ── Buttons ────────────────────────────────────────────── */
     .btn {
@@ -198,15 +216,36 @@
       display: flex; align-items: flex-start; justify-content: center;
       -webkit-overflow-scrolling: touch;
     }
-    #pdfCanvas { display: block; max-width: 100%; }
+    #pdfCanvas { display: block; }
     .nav-bar {
-      display: flex; gap: 10px; padding: 12px 16px;
-      padding-bottom: calc(12px + var(--safe-bottom));
+      display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+      padding-bottom: calc(10px + var(--safe-bottom));
       background: var(--surface);
       border-top: 1px solid rgba(108,99,255,.18);
       flex-shrink: 0;
     }
-    .nav-bar .btn { padding: 15px 12px; }
+    .nav-bar .btn { padding: 14px 10px; }
+
+    /* ── Zoom control ────────────────────────────────────────── */
+    .zoom-pill {
+      display: flex; align-items: center; gap: 0;
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 10px; overflow: hidden;
+      flex-shrink: 0;
+    }
+    .zoom-btn {
+      background: none; border: none; color: var(--text);
+      font-size: 18px; font-weight: 300; cursor: pointer;
+      padding: 0 13px; height: 46px; line-height: 1;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .zoom-btn:active { background: rgba(255,255,255,.1); }
+    .zoom-btn:disabled { opacity: .3; pointer-events: none; }
+    #zoomLabel {
+      font-size: 12px; font-weight: 600; color: var(--text-muted);
+      min-width: 38px; text-align: center; user-select: none;
+    }
 
     /* ── Book-done screen ───────────────────────────────────── */
     #doneScreen {
@@ -310,8 +349,18 @@
       <div class="setup-emoji">📚</div>
       <h1 class="setup-title">Daily Reader</h1>
       <p class="setup-subtitle">Read 5 pages a day. Every day. That's 1,800+ pages a year — without the guilt.</p>
+
+      <!-- Shown when returning to a book (permission needed via user gesture) -->
+      <div class="continue-card" id="continueCard" style="display:none">
+        <div style="font-size:13px;font-weight:600">Welcome back!</div>
+        <div class="continue-meta" id="continueMeta">Resume from page 1</div>
+        <button class="btn btn-primary" onclick="continueReading()">📖 Continue Reading</button>
+      </div>
+
+      <div class="or-divider" id="orDivider" style="display:none">or</div>
+
       <div class="setup-actions">
-        <button class="btn btn-primary" onclick="pickPDF()">📂 Open PDF from Device</button>
+        <button class="btn btn-outline" id="openNewBtn" onclick="pickPDF()">📂 Open PDF from Device</button>
         <div class="notif-hint" onclick="requestNotifPermission()">🔔 Enable 7 PM reading reminder</div>
       </div>
     </div>
@@ -322,8 +371,16 @@
         <canvas id="pdfCanvas"></canvas>
       </div>
       <div class="nav-bar">
-        <button class="btn btn-outline" id="prevBtn" onclick="prevPage()" style="flex:.45">← Back</button>
-        <button class="btn btn-primary"  id="nextBtn" onclick="nextPage()" style="flex:1">Next Page →</button>
+        <button class="btn btn-outline" id="prevBtn" onclick="prevPage()" style="flex:.38">← Back</button>
+
+        <!-- Zoom control -->
+        <div class="zoom-pill">
+          <button class="zoom-btn" id="zoomOutBtn" onclick="zoomOut()" aria-label="Zoom out">−</button>
+          <span id="zoomLabel">100%</span>
+          <button class="zoom-btn" id="zoomInBtn"  onclick="zoomIn()"  aria-label="Zoom in">+</button>
+        </div>
+
+        <button class="btn btn-primary" id="nextBtn" onclick="nextPage()" style="flex:1">Next →</button>
       </div>
     </div>
 
@@ -420,6 +477,9 @@ const NOTIF_HOUR   = 19; // 7 PM
  * bookName             — display name of the PDF
  * notifiedToday        — 7 PM notification sent today?
  */
+const ZOOM_LEVELS = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+const ZOOM_DEFAULT_IDX = 1; // 100%
+
 function blankState() {
   return {
     currentPage: 1,
@@ -434,6 +494,7 @@ function blankState() {
     totalPages: 0,
     bookName: '',
     notifiedToday: false,
+    zoomIdx: ZOOM_DEFAULT_IDX,  // index into ZOOM_LEVELS
   };
 }
 
@@ -564,24 +625,51 @@ async function pickPDF() {
   }
 }
 
-async function tryReloadStoredPDF() {
+// Called on app open — only uses queryPermission (no user gesture needed).
+// Returns true if permission was already granted and PDF loaded silently.
+// Returns false if permission needs to be re-requested (needs a button tap).
+async function tryAutoReloadPDF() {
   try {
     const handle = await idbGet('pdfHandle');
     if (!handle) return false;
 
-    // Check / request read permission
-    let perm = await handle.queryPermission({ mode: 'read' });
-    if (perm !== 'granted') {
-      perm = await handle.requestPermission({ mode: 'read' });
-    }
-    if (perm !== 'granted') return false;
+    // queryPermission is safe to call without user gesture
+    const perm = await handle.queryPermission({ mode: 'read' });
+    if (perm !== 'granted') return false; // needs user gesture — don't try requestPermission here
 
     const file = await handle.getFile();
     await loadPDFFile(file);
     return true;
   } catch (err) {
-    console.warn('[App] Could not reload stored PDF:', err);
+    console.warn('[App] Auto-reload failed:', err);
     return false;
+  }
+}
+
+// Called when user taps "Continue Reading" button — safe to call requestPermission here
+// because it runs inside a user gesture handler.
+async function continueReading() {
+  try {
+    const handle = await idbGet('pdfHandle');
+    if (!handle) { await pickPDF(); return; }
+
+    let perm = await handle.queryPermission({ mode: 'read' });
+    if (perm !== 'granted') {
+      perm = await handle.requestPermission({ mode: 'read' }); // needs user gesture ✓
+    }
+    if (perm !== 'granted') {
+      alert('Permission denied. Please use "Open PDF" to re-select the file.');
+      return;
+    }
+
+    const file = await handle.getFile();
+    // loadPDFFile uses existing state.currentPage — does NOT reset progress
+    await loadPDFFile(file);
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      console.error(err);
+      alert('Could not open the file. Please use "Open PDF" to re-select it.');
+    }
   }
 }
 
@@ -614,21 +702,24 @@ async function renderPage(pageNum) {
   showLoading('');
 
   try {
-    const page     = await pdfDoc.getPage(pageNum);
-    const canvas   = document.getElementById('pdfCanvas');
-    const ctx      = canvas.getContext('2d');
-    const wrap     = document.getElementById('canvasWrap');
-    const maxW     = wrap.clientWidth;
+    const page   = await pdfDoc.getPage(pageNum);
+    const canvas = document.getElementById('pdfCanvas');
+    const ctx    = canvas.getContext('2d');
+    const wrap   = document.getElementById('canvasWrap');
 
-    // Scale to fill the available width (max 2× for high-DPI sharpness)
-    const baseVP   = page.getViewport({ scale: 1 });
-    const scale    = Math.min(maxW / baseVP.width, window.devicePixelRatio * 1.5);
-    const vp       = page.getViewport({ scale });
+    // Render at physical pixels × zoom — crisp text on hi-DPI screens
+    const dpr       = window.devicePixelRatio || 1;
+    const zoom      = ZOOM_LEVELS[state.zoomIdx ?? ZOOM_DEFAULT_IDX];
+    const baseWidth = wrap.clientWidth;          // available CSS pixels at zoom=1
+    const cssWidth  = baseWidth * zoom;          // CSS pixels at current zoom
+    const baseVP    = page.getViewport({ scale: 1 });
+    const scale     = (cssWidth / baseVP.width) * dpr;
+    const vp        = page.getViewport({ scale });
 
-    canvas.width   = vp.width;
-    canvas.height  = vp.height;
-    canvas.style.width  = vp.width  + 'px';
-    canvas.style.height = vp.height + 'px';
+    canvas.width        = vp.width;             // physical pixels
+    canvas.height       = vp.height;
+    canvas.style.width  = cssWidth + 'px';      // CSS display size (scrollable when > screen)
+    canvas.style.height = (vp.height / dpr) + 'px';
 
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
     wrap.scrollTop = 0; // always start at top of each page
@@ -646,6 +737,9 @@ async function nextPage() {
   if (rendering) return;
   if (state.doneForToday) return;
 
+  // Snapshot whether quota is already done BEFORE incrementing
+  const wasAlreadyCompleted = state.todayCompleted;
+
   state.currentPage++;
   state.pagesCompletedToday++;
   state.totalPagesRead++;
@@ -661,17 +755,22 @@ async function nextPage() {
     return;
   }
 
-  await renderPage(state.currentPage);
-
-  // Daily quota just hit?
-  if (!state.todayCompleted && state.pagesCompletedToday >= DAILY_QUOTA) {
+  // FIX: show the goal modal BEFORE rendering the next page.
+  // This way the user finishes page N, taps Next, sees the modal asking
+  // "read one more?", and only sees page N+1 if they agree.
+  const justHitQuota = !wasAlreadyCompleted && state.pagesCompletedToday >= DAILY_QUOTA;
+  if (justHitQuota) {
     state.todayCompleted = true;
     saveState();
-    openGoalModal();
-  } else if (state.todayCompleted && !state.doneForToday) {
-    // They're reading extra pages — ask each time
-    openGoalModal();
+    openGoalModal(); // don't render yet — wait for user choice
+    return;
   }
+  if (wasAlreadyCompleted) {
+    openGoalModal(); // each extra page: ask again before showing
+    return;
+  }
+
+  await renderPage(state.currentPage);
 }
 
 async function prevPage() {
@@ -679,19 +778,24 @@ async function prevPage() {
   // Can go back within today's pages only
   if (state.currentPage <= state.todayStartPage) return;
   state.currentPage--;
-  // Note: pagesCompletedToday and totalPagesRead are not decremented —
-  // "going back" is for re-reading, not un-reading.
+  // pagesCompletedToday and totalPagesRead are NOT decremented —
+  // going back is for re-reading, not un-reading.
   saveState();
   await renderPage(state.currentPage);
 }
 
-function readOneMore() {
+async function readOneMore() {
   closeGoalModal();
-  // User just committed to reading the page they're currently on.
-  // They'll tap Next when done, which will trigger the modal again.
+  // NOW render the next page the user agreed to read
+  await renderPage(state.currentPage);
 }
 
 function doneForToday() {
+  // The counters were incremented (next page was "claimed") but the user
+  // declined to read it — roll back so currentPage stays on last read page.
+  state.currentPage--;
+  state.pagesCompletedToday--;
+  state.totalPagesRead--;
   state.doneForToday = true;
   saveState();
   closeGoalModal();
@@ -701,6 +805,30 @@ function doneForToday() {
 async function changeBook() {
   closeStats();
   await pickPDF();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Zoom
+// ═══════════════════════════════════════════════════════════════════
+async function zoomIn() {
+  if ((state.zoomIdx ?? ZOOM_DEFAULT_IDX) >= ZOOM_LEVELS.length - 1) return;
+  state.zoomIdx = (state.zoomIdx ?? ZOOM_DEFAULT_IDX) + 1;
+  saveState();
+  await renderPage(state.currentPage);
+}
+
+async function zoomOut() {
+  if ((state.zoomIdx ?? ZOOM_DEFAULT_IDX) <= 0) return;
+  state.zoomIdx = (state.zoomIdx ?? ZOOM_DEFAULT_IDX) - 1;
+  saveState();
+  await renderPage(state.currentPage);
+}
+
+function updateZoomUI() {
+  const idx = state.zoomIdx ?? ZOOM_DEFAULT_IDX;
+  document.getElementById('zoomLabel').textContent   = Math.round(ZOOM_LEVELS[idx] * 100) + '%';
+  document.getElementById('zoomOutBtn').disabled     = idx <= 0;
+  document.getElementById('zoomInBtn').disabled      = idx >= ZOOM_LEVELS.length - 1;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -742,6 +870,9 @@ function updateUI() {
   // Header
   document.getElementById('streakEl').textContent  = state.streak;
   document.getElementById('bookNameEl').textContent = state.bookName;
+
+  // Zoom
+  updateZoomUI();
 
   // 7 PM in-app banner
   checkOverdueBanner();
@@ -917,24 +1048,39 @@ async function init() {
   // 3. Schedule in-app 7 PM notification if permission already granted
   if (Notification.permission === 'granted') scheduleInAppNotif();
 
-  // 4. Try to reload the stored PDF
+  // 4. Try to load the PDF
   if (state.totalPages > 0) {
-    const loaded = await tryReloadStoredPDF();
+    // FIX: only call tryAutoReloadPDF (which uses queryPermission, no gesture needed).
+    // If permission is already granted (e.g. same Chrome session), it loads silently.
+    // If permission needs re-granting, we show a "Continue Reading" button instead of
+    // calling requestPermission() here — requestPermission() requires a user gesture
+    // and silently fails when called on page load, which was causing the reset bug.
+    const loaded = await tryAutoReloadPDF();
     if (!loaded) {
-      // PDF file moved or permission denied — show setup with a note
       hideLoading();
-      showScreen('setupScreen');
-      const note = `Welcome back! Please re-open your PDF to continue from page ${state.currentPage}.`;
-      // Small delay so it feels natural
-      setTimeout(() => alert(note), 300);
+      showSetupWithContinue();
     }
   } else {
     hideLoading();
     showScreen('setupScreen');
   }
 
-  // 5. Check if we should show the overdue banner (if a book is open)
+  // 5. Check if we should show the overdue banner
   if (state.totalPages > 0) checkOverdueBanner();
+}
+
+function showSetupWithContinue() {
+  showScreen('setupScreen');
+  // Show the "Continue" card with book info
+  const card = document.getElementById('continueCard');
+  const meta = document.getElementById('continueMeta');
+  const divider = document.getElementById('orDivider');
+  const openBtn = document.getElementById('openNewBtn');
+
+  meta.textContent = `"${state.bookName}" — resume from page ${state.currentPage} of ${state.totalPages}`;
+  card.style.display = 'flex';
+  divider.style.display = 'flex';
+  openBtn.textContent = '📂 Open Different PDF';
 }
 
 // Close modals when tapping the backdrop
