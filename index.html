@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0f0f1a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Daily Reader">
+  <link rel="manifest" href="./manifest.json">
+  <title>Daily Reader</title>
+  <style>
+    /* ── Design tokens ─────────────────────────────────────── */
+    :root {
+      --bg:           #0f0f1a;
+      --surface:      #1a1a2e;
+      --surface2:     #16213e;
+      --accent:       #6c63ff;
+      --accent-light: #a89cff;
+      --text:         #e8e8f0;
+      --text-muted:   #8888aa;
+      --success:      #4caf50;
+      --warning:      #ff9800;
+      --safe-bottom:  env(safe-area-inset-bottom, 0px);
+    }
+
+    /* ── Reset ─────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      -webkit-tap-highlight-color: transparent;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── App shell ──────────────────────────────────────────── */
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      height: 100dvh;
+    }
+
+    /* ── Loading overlay ────────────────────────────────────── */
+    #loadingOverlay {
+      position: fixed; inset: 0; z-index: 999;
+      background: var(--bg);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 14px;
+    }
+    #loadingOverlay.hidden { display: none; }
+    .spinner {
+      width: 38px; height: 38px;
+      border: 3px solid rgba(108,99,255,.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .75s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loadingMsg { font-size: 13px; color: var(--text-muted); }
+
+    /* ── Header ─────────────────────────────────────────────── */
+    #header {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid rgba(108,99,255,.18);
+      flex-shrink: 0;
+      gap: 8px;
+    }
+    #header.visible { display: flex; }
+    .header-left { min-width: 0; }
+    .header-title { font-size: 17px; font-weight: 700; }
+    .book-name {
+      font-size: 11px; color: var(--text-muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      max-width: 200px; margin-top: 1px;
+    }
+    .header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .streak-badge {
+      display: flex; align-items: center; gap: 3px;
+      background: rgba(108,99,255,.18);
+      border: 1px solid rgba(108,99,255,.4);
+      border-radius: 20px; padding: 4px 10px;
+      font-size: 13px; font-weight: 700; color: var(--accent-light);
+      cursor: default;
+    }
+    .icon-btn {
+      background: none; border: none; color: var(--text-muted);
+      cursor: pointer; padding: 8px; border-radius: 8px;
+      font-size: 20px; display: flex; align-items: center; line-height: 1;
+    }
+    .icon-btn:active { background: rgba(255,255,255,.08); }
+
+    /* ── Notification banner ────────────────────────────────── */
+    #notifBanner {
+      display: none;
+      align-items: center; gap: 10px;
+      padding: 9px 16px;
+      background: rgba(255,152,0,.12);
+      border-bottom: 1px solid rgba(255,152,0,.25);
+      font-size: 13px; color: var(--warning);
+      flex-shrink: 0;
+    }
+    #notifBanner.show { display: flex; }
+    #notifBanner span { flex: 1; }
+    #notifBanner button {
+      background: none; border: none; color: var(--warning);
+      cursor: pointer; font-size: 16px; padding: 2px 4px; flex-shrink: 0;
+    }
+
+    /* ── Progress strip ─────────────────────────────────────── */
+    #progressStrip {
+      display: none;
+      flex-direction: column; gap: 4px;
+      padding: 8px 16px 6px;
+      background: var(--surface);
+      border-bottom: 1px solid rgba(108,99,255,.1);
+      flex-shrink: 0;
+    }
+    #progressStrip.visible { display: flex; }
+    .progress-labels {
+      display: flex; justify-content: space-between;
+      font-size: 11px; color: var(--text-muted);
+    }
+    .progress-track {
+      height: 4px; background: rgba(255,255,255,.08);
+      border-radius: 2px; overflow: hidden;
+    }
+    #progressFill {
+      height: 100%; border-radius: 2px;
+      background: var(--accent);
+      transition: width .35s ease, background .35s ease;
+      width: 0%;
+    }
+    #progressFill.done { background: var(--success); }
+
+    /* ── Screen container ───────────────────────────────────── */
+    #screens { flex: 1; overflow: hidden; position: relative; }
+    .screen {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      opacity: 0; pointer-events: none;
+      transition: opacity .2s ease;
+    }
+    .screen.active { opacity: 1; pointer-events: auto; }
+
+    /* ── Setup screen ───────────────────────────────────────── */
+    #setupScreen {
+      align-items: center; justify-content: center;
+      padding: 40px 28px; text-align: center; gap: 18px;
+    }
+    .setup-emoji { font-size: 68px; line-height: 1; }
+    .setup-title { font-size: 28px; font-weight: 800; }
+    .setup-subtitle {
+      color: var(--text-muted); font-size: 15px;
+      line-height: 1.65; max-width: 300px;
+    }
+    .setup-actions { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 280px; margin-top: 8px; }
+    .notif-hint {
+      font-size: 12px; color: var(--text-muted);
+      display: flex; align-items: center; gap: 6px;
+      justify-content: center; cursor: pointer;
+      padding: 8px; border-radius: 8px;
+    }
+    .notif-hint:active { background: rgba(255,255,255,.06); }
+
+    /* ── Buttons ────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      padding: 14px 20px; border-radius: 12px; border: none;
+      font-size: 15px; font-weight: 600; cursor: pointer;
+      transition: opacity .15s, transform .1s;
+      width: 100%;
+    }
+    .btn:active { transform: scale(.97); }
+    .btn:disabled { opacity: .35; pointer-events: none; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-outline {
+      background: rgba(108,99,255,.12);
+      border: 1px solid rgba(108,99,255,.3);
+      color: var(--accent-light);
+    }
+    .btn-ghost { background: transparent; color: var(--text-muted); }
+    .btn-success { background: var(--success); color: #fff; }
+
+    /* ── Reading screen ─────────────────────────────────────── */
+    #readingScreen { overflow: hidden; }
+    #canvasWrap {
+      flex: 1; overflow: auto; overflow-x: auto;
+      background: #111;
+      display: flex; align-items: flex-start; justify-content: center;
+      -webkit-overflow-scrolling: touch;
+    }
+    #pdfCanvas { display: block; max-width: 100%; }
+    .nav-bar {
+      display: flex; gap: 10px; padding: 12px 16px;
+      padding-bottom: calc(12px + var(--safe-bottom));
+      background: var(--surface);
+      border-top: 1px solid rgba(108,99,255,.18);
+      flex-shrink: 0;
+    }
+    .nav-bar .btn { padding: 15px 12px; }
+
+    /* ── Book-done screen ───────────────────────────────────── */
+    #doneScreen {
+      align-items: center; justify-content: center;
+      padding: 40px 28px; text-align: center; gap: 20px;
+    }
+
+    /* ── Modal backdrop ─────────────────────────────────────── */
+    .modal-backdrop {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,.65);
+      display: flex; align-items: flex-end; justify-content: center;
+      backdrop-filter: blur(4px);
+      opacity: 0; pointer-events: none;
+      transition: opacity .2s ease;
+    }
+    .modal-backdrop.open { opacity: 1; pointer-events: auto; }
+    .modal-sheet {
+      background: var(--surface); border-radius: 22px 22px 0 0;
+      padding: 28px 24px calc(28px + var(--safe-bottom));
+      width: 100%; max-width: 500px;
+      text-align: center;
+      display: flex; flex-direction: column; align-items: center; gap: 14px;
+      transform: translateY(40px);
+      transition: transform .25s ease;
+    }
+    .modal-backdrop.open .modal-sheet { transform: translateY(0); }
+    .modal-icon { font-size: 52px; line-height: 1; }
+    .modal-title { font-size: 22px; font-weight: 800; }
+    .modal-body { font-size: 14px; color: var(--text-muted); line-height: 1.6; }
+    .modal-actions { display: flex; flex-direction: column; gap: 9px; width: 100%; margin-top: 4px; }
+
+    /* ── Stats modal extras ─────────────────────────────────── */
+    .stats-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 10px; width: 100%;
+    }
+    .stat-card {
+      background: var(--bg); border-radius: 12px;
+      padding: 14px 10px; text-align: center;
+    }
+    .stat-value { font-size: 26px; font-weight: 800; color: var(--accent-light); }
+    .stat-label { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .book-progress-wrap { width: 100%; }
+    .book-progress-track {
+      height: 7px; background: rgba(255,255,255,.08);
+      border-radius: 4px; overflow: hidden; margin-top: 6px;
+    }
+    #bookProgressFill { height: 100%; background: var(--success); border-radius: 4px; transition: width .5s ease; }
+
+    /* ── Misc ───────────────────────────────────────────────── */
+    @media (min-width: 520px) {
+      .modal-sheet { border-radius: 22px; margin-bottom: 20px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Loading overlay ───────────────────────────────────────────── -->
+<div id="loadingOverlay">
+  <div class="spinner"></div>
+  <div id="loadingMsg">Starting…</div>
+</div>
+
+<!-- ── App shell ─────────────────────────────────────────────────── -->
+<div id="app">
+
+  <!-- Header (hidden until a book is loaded) -->
+  <div id="header">
+    <div class="header-left">
+      <div class="header-title">📖 Daily Reader</div>
+      <div class="book-name" id="bookNameEl"></div>
+    </div>
+    <div class="header-right">
+      <div class="streak-badge">🔥&thinsp;<span id="streakEl">0</span></div>
+      <button class="icon-btn" onclick="openStats()" aria-label="Stats">📊</button>
+    </div>
+  </div>
+
+  <!-- 7 PM reminder banner -->
+  <div id="notifBanner">
+    <span>⏰</span>
+    <span>It's past 7 PM — you haven't hit today's reading goal!</span>
+    <button onclick="dismissBanner()" aria-label="Dismiss">✕</button>
+  </div>
+
+  <!-- Daily progress strip -->
+  <div id="progressStrip">
+    <div class="progress-labels">
+      <span id="progressLabel">0 / 5 pages today</span>
+      <span id="pageLabel">Page 1</span>
+    </div>
+    <div class="progress-track"><div id="progressFill"></div></div>
+  </div>
+
+  <!-- Screen container -->
+  <div id="screens">
+
+    <!-- 1. Setup screen -->
+    <div class="screen active" id="setupScreen">
+      <div class="setup-emoji">📚</div>
+      <h1 class="setup-title">Daily Reader</h1>
+      <p class="setup-subtitle">Read 5 pages a day. Every day. That's 1,800+ pages a year — without the guilt.</p>
+      <div class="setup-actions">
+        <button class="btn btn-primary" onclick="pickPDF()">📂 Open PDF from Device</button>
+        <div class="notif-hint" onclick="requestNotifPermission()">🔔 Enable 7 PM reading reminder</div>
+      </div>
+    </div>
+
+    <!-- 2. Reading screen -->
+    <div class="screen" id="readingScreen">
+      <div id="canvasWrap">
+        <canvas id="pdfCanvas"></canvas>
+      </div>
+      <div class="nav-bar">
+        <button class="btn btn-outline" id="prevBtn" onclick="prevPage()" style="flex:.45">← Back</button>
+        <button class="btn btn-primary"  id="nextBtn" onclick="nextPage()" style="flex:1">Next Page →</button>
+      </div>
+    </div>
+
+    <!-- 3. Book finished screen -->
+    <div class="screen" id="doneScreen">
+      <div style="font-size:72px">🎊</div>
+      <h2 style="font-size:26px;font-weight:800">Book Complete!</h2>
+      <p style="color:var(--text-muted);font-size:15px;line-height:1.6;max-width:280px;text-align:center">
+        You finished the whole book. Pick a new one to keep your streak alive!
+      </p>
+      <div style="display:flex;flex-direction:column;gap:10px;width:100%;max-width:280px;margin-top:8px">
+        <button class="btn btn-primary" onclick="pickPDF()">📂 Open New PDF</button>
+      </div>
+    </div>
+
+  </div><!-- /screens -->
+</div><!-- /app -->
+
+<!-- ── Daily Goal Complete modal ──────────────────────────────────── -->
+<div class="modal-backdrop" id="goalModal">
+  <div class="modal-sheet">
+    <div class="modal-icon" id="goalModalIcon">🎉</div>
+    <div class="modal-title" id="goalModalTitle">Daily Goal Complete!</div>
+    <div class="modal-body" id="goalModalBody">You've read <strong id="goalPagesEl">5</strong> pages today. Want to keep going?</div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="readOneMore()">📖 Read One More Page</button>
+      <button class="btn btn-ghost"   onclick="doneForToday()">✅ I'm Done for Today</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Stats modal ────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="statsModal">
+  <div class="modal-sheet">
+    <div class="modal-title">📊 Reading Stats</div>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-value" id="statStreak">0</div>
+        <div class="stat-label">🔥 Day Streak</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statTotal">0</div>
+        <div class="stat-label">📄 Pages Read</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statPct">0%</div>
+        <div class="stat-label">📚 Book Progress</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statDays">—</div>
+        <div class="stat-label">📅 Days to Finish</div>
+      </div>
+    </div>
+    <div class="book-progress-wrap">
+      <div style="font-size:11px;color:var(--text-muted);text-align:left">Book completion</div>
+      <div class="book-progress-track"><div id="bookProgressFill" style="width:0%"></div></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="changeBook()">📂 Change PDF</button>
+      <button class="btn btn-ghost"   onclick="closeStats()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Scripts ────────────────────────────────────────────────────── -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════════════════════
+//  Config
+// ═══════════════════════════════════════════════════════════════════
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+const DAILY_QUOTA  = 5;
+const STATE_KEY    = 'dailyReader_state';
+const NOTIF_HOUR   = 19; // 7 PM
+
+// ═══════════════════════════════════════════════════════════════════
+//  State
+// ═══════════════════════════════════════════════════════════════════
+/**
+ * currentPage          — page currently being shown (1-indexed)
+ * todayStartPage       — page where today's session began
+ * pagesCompletedToday  — how many pages moved past today (monotonic)
+ * todayCompleted       — daily quota reached?
+ * doneForToday         — user explicitly chose to stop
+ * totalPagesRead       — lifetime counter
+ * streak               — consecutive days with quota met
+ * lastCompletedDate    — ISO date string of last completed day
+ * today                — ISO date string of current session
+ * totalPages           — total pages in the current PDF
+ * bookName             — display name of the PDF
+ * notifiedToday        — 7 PM notification sent today?
+ */
+function blankState() {
+  return {
+    currentPage: 1,
+    todayStartPage: 1,
+    pagesCompletedToday: 0,
+    todayCompleted: false,
+    doneForToday: false,
+    totalPagesRead: 0,
+    streak: 0,
+    lastCompletedDate: null,
+    today: null,
+    totalPages: 0,
+    bookName: '',
+    notifiedToday: false,
+  };
+}
+
+let state = loadState();
+let pdfDoc = null;        // loaded PDF.js document
+let rendering = false;    // guard against concurrent renders
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STATE_KEY);
+    return raw ? { ...blankState(), ...JSON.parse(raw) } : blankState();
+  } catch { return blankState(); }
+}
+
+function saveState() {
+  localStorage.setItem(STATE_KEY, JSON.stringify(state));
+  // Mirror to IDB so the service worker can read it for background notifications
+  idbPut('appState', { ...state }).catch(() => {});
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Date helpers
+// ═══════════════════════════════════════════════════════════════════
+function today() {
+  return new Date().toISOString().split('T')[0];
+}
+function dayBefore(isoDate) {
+  const d = new Date(isoDate + 'T12:00:00'); // noon avoids DST edge-cases
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().split('T')[0];
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Day-transition logic
+// ═══════════════════════════════════════════════════════════════════
+function handleDayTransition() {
+  const now = today();
+  if (state.today === now) return; // same day — nothing to do
+
+  if (state.today !== null) {
+    // Were we consecutive and did we finish yesterday?
+    const wasYesterday = dayBefore(now) === state.today;
+    if (wasYesterday && state.todayCompleted) {
+      state.streak++;
+    } else {
+      state.streak = 0; // missed a day, or yesterday's quota wasn't met
+    }
+  }
+
+  // Roll over to the new day
+  state.today            = now;
+  state.todayStartPage   = state.currentPage;
+  state.pagesCompletedToday = 0;
+  state.todayCompleted   = false;
+  state.doneForToday     = false;
+  state.notifiedToday    = false;
+  saveState();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  IndexedDB helpers (tiny wrapper — no deps)
+// ═══════════════════════════════════════════════════════════════════
+let _idb = null;
+
+function openIDB() {
+  if (_idb) return Promise.resolve(_idb);
+  return new Promise((res, rej) => {
+    const req = indexedDB.open('DailyReaderDB', 1);
+    req.onupgradeneeded = e => {
+      if (!e.target.result.objectStoreNames.contains('data'))
+        e.target.result.createObjectStore('data');
+    };
+    req.onsuccess = e => { _idb = e.target.result; res(_idb); };
+    req.onerror   = e => rej(e.target.error);
+  });
+}
+
+async function idbGet(key) {
+  const db = await openIDB();
+  return new Promise((res, rej) => {
+    const tx  = db.transaction('data', 'readonly');
+    const req = tx.objectStore('data').get(key);
+    req.onsuccess = e => res(e.target.result);
+    req.onerror   = e => rej(e.target.error);
+  });
+}
+
+async function idbPut(key, value) {
+  const db = await openIDB();
+  return new Promise((res, rej) => {
+    const tx  = db.transaction('data', 'readwrite');
+    const req = tx.objectStore('data').put(value, key);
+    req.onsuccess = () => res();
+    req.onerror   = e => rej(e.target.error);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  File System Access API
+// ═══════════════════════════════════════════════════════════════════
+async function pickPDF() {
+  try {
+    const [handle] = await window.showOpenFilePicker({
+      types: [{ description: 'PDF Files', accept: { 'application/pdf': ['.pdf'] } }],
+      multiple: false,
+    });
+    await idbPut('pdfHandle', handle);
+
+    const file = await handle.getFile();
+
+    // Reset all per-book state while keeping streak-related fields
+    const savedStreak = state.streak;
+    const savedLCD    = state.lastCompletedDate;
+    state = blankState();
+    state.streak            = savedStreak;
+    state.lastCompletedDate = savedLCD;
+    state.bookName          = file.name.replace(/\.pdf$/i, '');
+    state.today             = today();
+    state.todayStartPage    = 1;
+    saveState();
+
+    await loadPDFFile(file);
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      alert('Could not open the PDF. Please try again.');
+      console.error(err);
+    }
+  }
+}
+
+async function tryReloadStoredPDF() {
+  try {
+    const handle = await idbGet('pdfHandle');
+    if (!handle) return false;
+
+    // Check / request read permission
+    let perm = await handle.queryPermission({ mode: 'read' });
+    if (perm !== 'granted') {
+      perm = await handle.requestPermission({ mode: 'read' });
+    }
+    if (perm !== 'granted') return false;
+
+    const file = await handle.getFile();
+    await loadPDFFile(file);
+    return true;
+  } catch (err) {
+    console.warn('[App] Could not reload stored PDF:', err);
+    return false;
+  }
+}
+
+async function loadPDFFile(file) {
+  showLoading('Loading PDF…');
+  try {
+    const buf = await file.arrayBuffer();
+    pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
+    state.totalPages = pdfDoc.numPages;
+    saveState();
+    hideLoading();
+    showScreen('readingScreen');
+    showAppChrome();
+    await renderPage(state.currentPage);
+  } catch (err) {
+    hideLoading();
+    alert('Failed to parse this PDF. Is it password-protected?');
+    console.error(err);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  PDF rendering
+// ═══════════════════════════════════════════════════════════════════
+async function renderPage(pageNum) {
+  if (!pdfDoc || rendering) return;
+  if (pageNum < 1 || pageNum > state.totalPages) return;
+
+  rendering = true;
+  showLoading('');
+
+  try {
+    const page     = await pdfDoc.getPage(pageNum);
+    const canvas   = document.getElementById('pdfCanvas');
+    const ctx      = canvas.getContext('2d');
+    const wrap     = document.getElementById('canvasWrap');
+    const maxW     = wrap.clientWidth;
+
+    // Scale to fill the available width (max 2× for high-DPI sharpness)
+    const baseVP   = page.getViewport({ scale: 1 });
+    const scale    = Math.min(maxW / baseVP.width, window.devicePixelRatio * 1.5);
+    const vp       = page.getViewport({ scale });
+
+    canvas.width   = vp.width;
+    canvas.height  = vp.height;
+    canvas.style.width  = vp.width  + 'px';
+    canvas.style.height = vp.height + 'px';
+
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    wrap.scrollTop = 0; // always start at top of each page
+  } finally {
+    rendering = false;
+    hideLoading();
+    updateUI();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Navigation
+// ═══════════════════════════════════════════════════════════════════
+async function nextPage() {
+  if (rendering) return;
+  if (state.doneForToday) return;
+
+  state.currentPage++;
+  state.pagesCompletedToday++;
+  state.totalPagesRead++;
+  saveState();
+
+  // End of book
+  if (state.currentPage > state.totalPages) {
+    state.todayCompleted = true;
+    state.streak++;
+    saveState();
+    showScreen('doneScreen');
+    hideAppChrome();
+    return;
+  }
+
+  await renderPage(state.currentPage);
+
+  // Daily quota just hit?
+  if (!state.todayCompleted && state.pagesCompletedToday >= DAILY_QUOTA) {
+    state.todayCompleted = true;
+    saveState();
+    openGoalModal();
+  } else if (state.todayCompleted && !state.doneForToday) {
+    // They're reading extra pages — ask each time
+    openGoalModal();
+  }
+}
+
+async function prevPage() {
+  if (rendering) return;
+  // Can go back within today's pages only
+  if (state.currentPage <= state.todayStartPage) return;
+  state.currentPage--;
+  // Note: pagesCompletedToday and totalPagesRead are not decremented —
+  // "going back" is for re-reading, not un-reading.
+  saveState();
+  await renderPage(state.currentPage);
+}
+
+function readOneMore() {
+  closeGoalModal();
+  // User just committed to reading the page they're currently on.
+  // They'll tap Next when done, which will trigger the modal again.
+}
+
+function doneForToday() {
+  state.doneForToday = true;
+  saveState();
+  closeGoalModal();
+  updateUI();
+}
+
+async function changeBook() {
+  closeStats();
+  await pickPDF();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  UI updates
+// ═══════════════════════════════════════════════════════════════════
+function updateUI() {
+  const done     = state.todayCompleted;
+  const pct      = Math.min((state.pagesCompletedToday / DAILY_QUOTA) * 100, 100);
+  const extra    = Math.max(0, state.pagesCompletedToday - DAILY_QUOTA);
+
+  // Progress strip
+  document.getElementById('progressLabel').textContent = done
+    ? `✅ ${state.pagesCompletedToday} pages today` + (extra > 0 ? ` (+${extra} extra)` : '')
+    : `${state.pagesCompletedToday} / ${DAILY_QUOTA} pages today`;
+
+  document.getElementById('pageLabel').textContent =
+    `Page ${state.currentPage} of ${state.totalPages}`;
+
+  const fill = document.getElementById('progressFill');
+  fill.style.width = pct + '%';
+  fill.classList.toggle('done', done);
+
+  // Prev button
+  const prevBtn = document.getElementById('prevBtn');
+  prevBtn.disabled = state.currentPage <= state.todayStartPage;
+
+  // Next button
+  const nextBtn = document.getElementById('nextBtn');
+  if (state.doneForToday) {
+    nextBtn.textContent  = '✅ Done for Today';
+    nextBtn.className    = 'btn btn-success';
+    nextBtn.disabled     = true;
+  } else {
+    nextBtn.textContent  = 'Next Page →';
+    nextBtn.className    = 'btn btn-primary';
+    nextBtn.disabled     = false;
+  }
+
+  // Header
+  document.getElementById('streakEl').textContent  = state.streak;
+  document.getElementById('bookNameEl').textContent = state.bookName;
+
+  // 7 PM in-app banner
+  checkOverdueBanner();
+}
+
+function checkOverdueBanner() {
+  const hour = new Date().getHours();
+  if (hour >= NOTIF_HOUR && !state.todayCompleted) {
+    document.getElementById('notifBanner').classList.add('show');
+  }
+}
+
+function dismissBanner() {
+  document.getElementById('notifBanner').classList.remove('show');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Screen management
+// ═══════════════════════════════════════════════════════════════════
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+function showAppChrome() {
+  document.getElementById('header').classList.add('visible');
+  document.getElementById('progressStrip').classList.add('visible');
+}
+
+function hideAppChrome() {
+  document.getElementById('progressStrip').classList.remove('visible');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Goal modal
+// ═══════════════════════════════════════════════════════════════════
+function openGoalModal() {
+  const extra = Math.max(0, state.pagesCompletedToday - DAILY_QUOTA);
+  const isExtra = extra > 0;
+
+  document.getElementById('goalModalIcon').textContent  = isExtra ? '⭐' : '🎉';
+  document.getElementById('goalModalTitle').textContent = isExtra ? 'Impressive!' : 'Daily Goal Complete!';
+  document.getElementById('goalPagesEl').textContent    = state.pagesCompletedToday;
+  document.getElementById('goalModal').classList.add('open');
+}
+
+function closeGoalModal() {
+  document.getElementById('goalModal').classList.remove('open');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Stats modal
+// ═══════════════════════════════════════════════════════════════════
+function openStats() {
+  const tp   = state.totalPages || 1;
+  const done = state.currentPage - 1;
+  const pct  = Math.round((done / tp) * 100);
+  const left = tp - done;
+  const days = Math.ceil(left / DAILY_QUOTA);
+
+  document.getElementById('statStreak').textContent = state.streak;
+  document.getElementById('statTotal').textContent  = state.totalPagesRead;
+  document.getElementById('statPct').textContent    = pct + '%';
+  document.getElementById('statDays').textContent   = left > 0 ? days : '🎉';
+  document.getElementById('bookProgressFill').style.width = pct + '%';
+
+  document.getElementById('statsModal').classList.add('open');
+}
+
+function closeStats() {
+  document.getElementById('statsModal').classList.remove('open');
+}
+
+// Alias used by stats modal button
+function showStats() { openStats(); }
+function hideStats()  { closeStats(); }
+
+// ═══════════════════════════════════════════════════════════════════
+//  Loading overlay
+// ═══════════════════════════════════════════════════════════════════
+function showLoading(msg) {
+  document.getElementById('loadingMsg').textContent = msg || 'Loading…';
+  document.getElementById('loadingOverlay').classList.remove('hidden');
+}
+
+function hideLoading() {
+  document.getElementById('loadingOverlay').classList.add('hidden');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Notifications
+// ═══════════════════════════════════════════════════════════════════
+async function requestNotifPermission() {
+  if (!('Notification' in window)) {
+    alert('Your browser does not support notifications.');
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    alert('Notifications are blocked. Enable them in your browser settings.');
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  if (perm === 'granted') {
+    scheduleInAppNotif();
+    alert('✅ Reminders enabled! You\'ll be notified at 7 PM if you haven\'t read yet.');
+  }
+}
+
+function scheduleInAppNotif() {
+  if (Notification.permission !== 'granted') return;
+
+  const now    = new Date();
+  const target = new Date();
+  target.setHours(NOTIF_HOUR, 0, 0, 0);
+  if (now >= target) return; // already past 7 PM today
+
+  const delay = target - now;
+  setTimeout(() => {
+    if (!state.todayCompleted && !state.notifiedToday) {
+      const completed = state.pagesCompletedToday;
+      new Notification('📖 Daily Reading Reminder', {
+        body: completed > 0
+          ? `${completed} of 5 pages done — finish strong today!`
+          : "You haven't started today's 5 pages yet. Open Daily Reader!",
+        icon: './icons/icon-192.png',
+        tag: 'daily-reminder',
+      });
+      state.notifiedToday = true;
+      saveState();
+    }
+  }, delay);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Service Worker + PWA
+// ═══════════════════════════════════════════════════════════════════
+async function registerSW() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+    console.log('[App] SW registered, scope:', reg.scope);
+
+    // Try to register Periodic Background Sync for 7 PM reminder
+    if ('periodicSync' in reg) {
+      try {
+        const status = await navigator.permissions.query({ name: 'periodic-background-sync' });
+        if (status.state === 'granted') {
+          await reg.periodicSync.register('daily-reminder', {
+            minInterval: 3 * 60 * 60 * 1000, // every 3 hours minimum
+          });
+        }
+      } catch (e) {
+        console.log('[App] Periodic sync unavailable (needs PWA install + permission):', e.message);
+      }
+    }
+  } catch (err) {
+    console.warn('[App] SW registration failed:', err);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  App bootstrap
+// ═══════════════════════════════════════════════════════════════════
+async function init() {
+  showLoading('Starting…');
+
+  // 1. Transition day if needed
+  handleDayTransition();
+
+  // 2. Register service worker
+  await registerSW();
+
+  // 3. Schedule in-app 7 PM notification if permission already granted
+  if (Notification.permission === 'granted') scheduleInAppNotif();
+
+  // 4. Try to reload the stored PDF
+  if (state.totalPages > 0) {
+    const loaded = await tryReloadStoredPDF();
+    if (!loaded) {
+      // PDF file moved or permission denied — show setup with a note
+      hideLoading();
+      showScreen('setupScreen');
+      const note = `Welcome back! Please re-open your PDF to continue from page ${state.currentPage}.`;
+      // Small delay so it feels natural
+      setTimeout(() => alert(note), 300);
+    }
+  } else {
+    hideLoading();
+    showScreen('setupScreen');
+  }
+
+  // 5. Check if we should show the overdue banner (if a book is open)
+  if (state.totalPages > 0) checkOverdueBanner();
+}
+
+// Close modals when tapping the backdrop
+document.getElementById('goalModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('goalModal')) closeGoalModal();
+});
+document.getElementById('statsModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('statsModal')) closeStats();
+});
+
+// Start
+init();
+</script>
+</body>
+</html>
