@@ -232,11 +232,11 @@
 
     /* ── Zoom control ────────────────────────────────────────── */
     .zoom-pill {
-      display: flex; align-items: center; gap: 0;
+      display: flex; align-items: center; justify-content: center; gap: 0;
       background: rgba(255,255,255,.06);
       border: 1px solid rgba(255,255,255,.1);
       border-radius: 10px; overflow: hidden;
-      flex-shrink: 0;
+      flex: 1; /* fill remaining space so arrows stay at the edges */
     }
     .zoom-btn {
       background: none; border: none; color: var(--text);
@@ -346,9 +346,9 @@
       background: rgba(108,99,255,.12);
       border: 1px solid rgba(108,99,255,.3);
       color: var(--accent-light);
-      border-radius: 12px;
-      font-size: 22px;
-      width: 46px; height: 46px;
+      border-radius: 14px;
+      font-size: 28px;
+      width: 64px; height: 46px;
       display: flex; align-items: center; justify-content: center;
       cursor: pointer; flex-shrink: 0;
       transition: opacity .15s, transform .1s;
@@ -356,6 +356,25 @@
     }
     .nav-arrow:active { transform: scale(.93); background: rgba(108,99,255,.25); }
     .nav-arrow:disabled { opacity: .28; pointer-events: none; }
+    /* ── Jump-to-page ────────────────────────────────────────── */
+    #pageLabel {
+      cursor: pointer; border-radius: 6px; padding: 2px 6px;
+      transition: background .15s;
+      text-decoration: underline dotted rgba(168,156,255,.5);
+    }
+    #pageLabel:active { background: rgba(108,99,255,.18); }
+    .jump-input {
+      width: 100%; padding: 14px 16px;
+      background: var(--bg); border: 1px solid rgba(108,99,255,.4);
+      border-radius: 12px; color: var(--text);
+      font-size: 22px; font-weight: 700; text-align: center;
+      outline: none;
+    }
+    .jump-input:focus { border-color: var(--accent); }
+    .jump-range {
+      font-size: 12px; color: var(--text-muted); text-align: center;
+    }
+
     /* ── Misc ───────────────────────────────────────────────── */
     @media (min-width: 520px) {
       .modal-sheet { border-radius: 22px; margin-bottom: 20px; }
@@ -396,7 +415,7 @@
   <div id="progressStrip">
     <div class="progress-labels">
       <span id="progressLabel">0 / 5 pages today</span>
-      <span id="pageLabel">Page 1</span>
+      <span id="pageLabel" onclick="openJumpModal()" title="Tap to jump to page">Page 1</span>
     </div>
     <div class="progress-track"><div id="progressFill"></div></div>
   </div>
@@ -511,6 +530,21 @@
       <button class="btn btn-outline" onclick="shareStreak()">📤 Share Streak</button>
       <button class="btn btn-outline" onclick="changeBook()">📂 Change PDF</button>
       <button class="btn btn-ghost"   onclick="closeStats()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Jump-to-page modal ─────────────────────────────────────────── -->
+<div class="modal-backdrop" id="jumpModal">
+  <div class="modal-sheet" style="gap:12px">
+    <div class="modal-title" style="font-size:18px">Jump to Page</div>
+    <div class="jump-range" id="jumpRange">Pages 1 – 1</div>
+    <input class="jump-input" id="jumpInput" type="number" inputmode="numeric"
+           min="1" max="9999" placeholder="–"
+           onkeydown="if(event.key==='Enter') confirmJump()">
+    <div class="modal-actions" style="flex-direction:row;gap:10px">
+      <button class="btn btn-ghost"   style="flex:1" onclick="closeJumpModal()">Cancel</button>
+      <button class="btn btn-primary" style="flex:1" onclick="confirmJump()">Go</button>
     </div>
   </div>
 </div>
@@ -1120,6 +1154,48 @@ function showStats() { openStats(); }
 function hideStats()  { closeStats(); }
 
 // ═══════════════════════════════════════════════════════════════════
+//  Jump-to-page
+// ═══════════════════════════════════════════════════════════════════
+function openJumpModal() {
+  if (!pdfDoc) return;                       // no book loaded
+  const min = state.todayStartPage;
+  const max = state.highWaterPageToday || state.todayStartPage;
+  if (min >= max) return;                    // nothing to jump to yet
+
+  const input = document.getElementById('jumpInput');
+  input.min   = min;
+  input.max   = max;
+  input.value = state.currentPage;
+  document.getElementById('jumpRange').textContent = `Pages ${min} – ${max}`;
+  document.getElementById('jumpModal').classList.add('open');
+  // Auto-select so user can type immediately
+  setTimeout(() => { input.focus(); input.select(); }, 100);
+}
+
+function closeJumpModal() {
+  document.getElementById('jumpModal').classList.remove('open');
+}
+
+async function confirmJump() {
+  const min   = state.todayStartPage;
+  const max   = state.highWaterPageToday || state.todayStartPage;
+  const input = document.getElementById('jumpInput');
+  const page  = parseInt(input.value, 10);
+
+  if (!page || page < min || page > max) {
+    input.style.borderColor = '#f44';
+    setTimeout(() => input.style.borderColor = '', 600);
+    return;
+  }
+
+  closeJumpModal();
+  if (page === state.currentPage) return;
+  state.currentPage = page;
+  saveState();
+  await renderPage(state.currentPage);
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  Loading overlay
 // ═══════════════════════════════════════════════════════════════════
 function showLoading(msg) {
@@ -1252,9 +1328,12 @@ function showSetupWithContinue() {
   openBtn.textContent = '📂 Open Different PDF';
 }
 
-// Close stats modal when tapping the backdrop
+// Close modals when tapping the backdrop
 document.getElementById('statsModal').addEventListener('click', e => {
   if (e.target === document.getElementById('statsModal')) closeStats();
+});
+document.getElementById('jumpModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('jumpModal')) closeJumpModal();
 });
 
 // Start
