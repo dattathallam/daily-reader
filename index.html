@@ -964,7 +964,10 @@ function hideAppChrome() {
 // ═══════════════════════════════════════════════════════════════════
 function openStats() {
   const tp   = state.totalPages || 1;
-  const done = state.currentPage - 1;
+  // Use furthest progress reached — never goes backward when user scrolls back.
+  // (todayStartPage - 1) = all pages completed before today.
+  // pagesCompletedToday  = pages completed today.
+  const done = (state.todayStartPage - 1) + state.pagesCompletedToday;
   const pct  = Math.round((done / tp) * 100);
   const left = tp - done;
   const days = Math.ceil(left / DAILY_QUOTA);
