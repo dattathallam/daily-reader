@@ -60,9 +60,13 @@ function blankState(overrides = {}) {
     bookName: 'Test Book',
     notifiedToday: false,
     zoomIdx: 1,
+    dailyQuota: DAILY_QUOTA,
+    habitLog: {},
     ...overrides,
   };
 }
+
+function quota(state) { return state.dailyQuota || DAILY_QUOTA; }
 
 function dayBefore(isoDate) {
   const d = new Date(isoDate + 'T12:00:00');
@@ -83,6 +87,16 @@ function handleDayTransition(state, now) {
   if (state.today === now) return { ...state };           // same day — no change
   const s = { ...state };
   if (s.today !== null) {
+    // Log yesterday's habit result
+    const log = { ...(s.habitLog || {}) };
+    log[s.today] = s.todayCompleted;
+    const cutoff = (() => {
+      const d = new Date(now + 'T12:00:00'); d.setDate(d.getDate() - 14);
+      return d.toISOString().split('T')[0];
+    })();
+    Object.keys(log).forEach(k => { if (k < cutoff) delete log[k]; });
+    s.habitLog = log;
+
     const wasYesterday = dayBefore(now) === s.today;
     s.streak = (wasYesterday && s.todayCompleted) ? s.streak + 1 : 0;
   }
@@ -113,7 +127,7 @@ function nextPage(state) {
   s.currentPage++;
   s.pagesCompletedToday++;
   s.totalPagesRead++;
-  if (!s.todayCompleted && s.pagesCompletedToday >= DAILY_QUOTA) {
+  if (!s.todayCompleted && s.pagesCompletedToday >= quota(s)) {
     s.todayCompleted = true;
   }
 
@@ -615,6 +629,107 @@ test('todayStartPage > 1 (returning reader): free nav works within session', () 
   eq(a1, 'new_page');
   eq(s1.currentPage, 27);
   eq(s1.pagesCompletedToday, 1);
+});
+
+
+// ── 11. Configurable daily quota ─────────────────────────────────────────────
+suite('11 · Configurable daily quota');
+
+test('quota() returns dailyQuota from state when set', () => {
+  const s = blankState({ dailyQuota: 10 });
+  eq(quota(s), 10);
+});
+
+test('quota() falls back to DAILY_QUOTA when unset', () => {
+  const s = blankState({ dailyQuota: undefined });
+  eq(quota(s), DAILY_QUOTA);
+});
+
+test('todayCompleted triggers at custom quota of 10', () => {
+  let s = blankState({ currentPage: 1, dailyQuota: 10 });
+  s = readNPages(s, 9);
+  eq(s.todayCompleted, false, 'not yet at 10');
+  s = readNPages(s, 1);
+  eq(s.todayCompleted, true, 'hit 10-page quota');
+  eq(s.pagesCompletedToday, 10);
+});
+
+test('todayCompleted triggers at custom quota of 3', () => {
+  let s = blankState({ currentPage: 1, dailyQuota: 3 });
+  s = readNPages(s, 2);
+  eq(s.todayCompleted, false);
+  s = readNPages(s, 1);
+  eq(s.todayCompleted, true);
+});
+
+test('Changing quota mid-session does not corrupt pagesCompletedToday', () => {
+  let s = blankState({ currentPage: 1, dailyQuota: 5 });
+  s = readNPages(s, 3);
+  eq(s.pagesCompletedToday, 3);
+  // User changes quota to 10
+  s = { ...s, dailyQuota: 10 };
+  eq(quota(s), 10, 'quota updated');
+  eq(s.pagesCompletedToday, 3, 'pages read unchanged');
+  eq(s.todayCompleted, false, 'not complete yet under new quota');
+});
+
+
+// ── 12. Habit log ─────────────────────────────────────────────────────────────
+suite('12 · Habit log — day transition writes correct entries');
+
+test('Completed day is logged as true', () => {
+  const d1 = '2026-01-10';
+  const d2 = dayAfter(d1);
+  let s = blankState({ today: d1, todayCompleted: true });
+  s = handleDayTransition(s, d2);
+  eq(s.habitLog[d1], true, 'd1 logged as completed');
+});
+
+test('Missed day is logged as false', () => {
+  const d1 = '2026-01-10';
+  const d2 = dayAfter(d1);
+  let s = blankState({ today: d1, todayCompleted: false });
+  s = handleDayTransition(s, d2);
+  eq(s.habitLog[d1], false, 'd1 logged as missed');
+});
+
+test('Habit log accumulates over multiple days', () => {
+  const base = '2026-01-10';
+  let s = blankState({ today: base, todayStartPage: 1 });
+
+  // Day 1: complete
+  s = readNPages(s, 5);
+  s = handleDayTransition(s, dayAfter(base));
+  eq(s.habitLog[base], true, 'day 1 complete');
+
+  // Day 2: don't complete
+  s = handleDayTransition(s, '2026-01-12');
+  eq(s.habitLog['2026-01-11'], false, 'day 2 missed');
+});
+
+test('Old entries (>14 days) are pruned from habit log', () => {
+  const old   = '2025-12-01';
+  const now   = '2026-01-10';
+  let s = blankState({ today: old, todayCompleted: true, habitLog: { [old]: true } });
+  s = handleDayTransition(s, now);
+  assert(!(old in s.habitLog), 'old entry pruned');
+});
+
+test('Recent entries are kept after pruning', () => {
+  const d1  = '2026-01-08';
+  const d2  = '2026-01-09';
+  const now = '2026-01-10';
+  let s = blankState({ today: d2, todayCompleted: true, habitLog: { [d1]: false } });
+  s = handleDayTransition(s, now);
+  assert(d1 in s.habitLog, 'd1 kept');
+  assert(d2 in s.habitLog, 'd2 logged');
+});
+
+test('First-ever transition does not write habitLog (today was null)', () => {
+  const now = '2026-01-10';
+  let s = blankState({ today: null, habitLog: {} });
+  s = handleDayTransition(s, now);
+  eq(Object.keys(s.habitLog).length, 0, 'no entry written when today was null');
 });
 
 

@@ -300,6 +300,47 @@
     }
     #bookProgressFill { height: 100%; background: var(--success); border-radius: 4px; transition: width .5s ease; }
 
+    /* ── Habit grid ─────────────────────────────────────────── */
+    .habit-grid {
+      display: flex; justify-content: space-between; width: 100%;
+      padding: 4px 0;
+    }
+    .habit-day {
+      display: flex; flex-direction: column; align-items: center; gap: 5px;
+      flex: 1;
+    }
+    .habit-dot {
+      width: 30px; height: 30px; border-radius: 50%;
+      background: rgba(255,255,255,.06);
+      border: 2px solid rgba(255,255,255,.1);
+      transition: background .3s, border-color .3s;
+    }
+    .habit-dot.done   { background: var(--success); border-color: var(--success); }
+    .habit-dot.missed { background: rgba(255,80,80,.15); border-color: rgba(255,80,80,.25); }
+    .habit-dot.today-done { background: var(--success); border-color: var(--success); }
+    .habit-dot.today-progress {
+      background: rgba(108,99,255,.25); border-color: var(--accent);
+      animation: pulse-ring 2s ease-in-out infinite;
+    }
+    @keyframes pulse-ring {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(108,99,255,.4); }
+      50%       { box-shadow: 0 0 0 5px rgba(108,99,255,0); }
+    }
+    .habit-label { font-size: 10px; color: var(--text-muted); font-weight: 600; }
+
+    /* ── Quota selector ──────────────────────────────────────── */
+    .quota-wrap { width: 100%; }
+    .quota-options { display: flex; gap: 8px; margin-top: 6px; }
+    .quota-btn {
+      flex: 1; padding: 10px 0;
+      border-radius: 10px; border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.05);
+      color: var(--text-muted); font-size: 15px; font-weight: 700;
+      cursor: pointer; transition: all .15s;
+    }
+    .quota-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .quota-btn:active { transform: scale(.95); }
+
     /* ── Nav arrow buttons (← →) ───────────────────────────── */
     .nav-arrow {
       background: rgba(108,99,255,.12);
@@ -315,26 +356,6 @@
     }
     .nav-arrow:active { transform: scale(.93); background: rgba(108,99,255,.25); }
     .nav-arrow:disabled { opacity: .28; pointer-events: none; }
-    .done-btn { flex: 1; }
-
-    /* ── Status toast ────────────────────────────────────────── */
-    #statusToast {
-      position: fixed;
-      top: 0; left: 0; right: 0;
-      z-index: 300;
-      padding: 14px 20px;
-      background: var(--surface2);
-      border-bottom: 2px solid var(--accent);
-      color: var(--text);
-      font-size: 14px; font-weight: 500;
-      text-align: center;
-      transform: translateY(-100%);
-      transition: transform .3s ease;
-      pointer-events: none;
-      safe-area-inset-top: env(safe-area-inset-top, 0px);
-    }
-    #statusToast.show { transform: translateY(0); }
-
     /* ── Misc ───────────────────────────────────────────────── */
     @media (min-width: 520px) {
       .modal-sheet { border-radius: 22px; margin-bottom: 20px; }
@@ -419,8 +440,6 @@
           <button class="zoom-btn" id="zoomInBtn"  onclick="zoomIn()"  aria-label="Zoom in">+</button>
         </div>
 
-        <button class="btn btn-primary done-btn" id="doneBtn" onclick="onDoneTap()">Done</button>
-
         <button class="nav-arrow" id="nextBtn" onclick="nextPage()" aria-label="Next page">→</button>
       </div>
     </div>
@@ -440,13 +459,12 @@
   </div><!-- /screens -->
 </div><!-- /app -->
 
-<!-- ── Status toast ───────────────────────────────────────────────── -->
-<div id="statusToast"></div>
-
 <!-- ── Stats modal ────────────────────────────────────────────────── -->
 <div class="modal-backdrop" id="statsModal">
   <div class="modal-sheet">
     <div class="modal-title">📊 Reading Stats</div>
+
+    <!-- 4-card grid -->
     <div class="stats-grid">
       <div class="stat-card">
         <div class="stat-value" id="statStreak">0</div>
@@ -465,11 +483,32 @@
         <div class="stat-label">📅 Days to Finish</div>
       </div>
     </div>
+
+    <!-- Book completion bar -->
     <div class="book-progress-wrap">
       <div style="font-size:11px;color:var(--text-muted);text-align:left">Book completion</div>
       <div class="book-progress-track"><div id="bookProgressFill" style="width:0%"></div></div>
     </div>
+
+    <!-- 7-day habit grid -->
+    <div style="width:100%">
+      <div style="font-size:11px;color:var(--text-muted);text-align:left;margin-bottom:6px">Last 7 days</div>
+      <div class="habit-grid" id="habitGrid"></div>
+    </div>
+
+    <!-- Daily quota selector -->
+    <div class="quota-wrap">
+      <div style="font-size:11px;color:var(--text-muted);text-align:left">Daily goal (pages)</div>
+      <div class="quota-options">
+        <button class="quota-btn" data-q="3"  onclick="setQuota(3)">3</button>
+        <button class="quota-btn" data-q="5"  onclick="setQuota(5)">5</button>
+        <button class="quota-btn" data-q="10" onclick="setQuota(10)">10</button>
+        <button class="quota-btn" data-q="20" onclick="setQuota(20)">20</button>
+      </div>
+    </div>
+
     <div class="modal-actions">
+      <button class="btn btn-outline" onclick="shareStreak()">📤 Share Streak</button>
       <button class="btn btn-outline" onclick="changeBook()">📂 Change PDF</button>
       <button class="btn btn-ghost"   onclick="closeStats()">Close</button>
     </div>
@@ -487,9 +526,12 @@
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-const DAILY_QUOTA  = 5;
+const DAILY_QUOTA  = 5;           // default — overridden by state.dailyQuota
 const STATE_KEY    = 'dailyReader_state';
 const NOTIF_HOUR   = 19; // 7 PM
+
+// Always read quota from state so changes take effect immediately
+function quota() { return state.dailyQuota || DAILY_QUOTA; }
 
 // ═══════════════════════════════════════════════════════════════════
 //  State
@@ -527,6 +569,8 @@ function blankState() {
     bookName: '',
     notifiedToday: false,
     zoomIdx: ZOOM_DEFAULT_IDX,
+    dailyQuota: DAILY_QUOTA,  // configurable — default 5
+    habitLog: {},             // { 'YYYY-MM-DD': true/false } last 14 days
   };
 }
 
@@ -574,6 +618,17 @@ function handleDayTransition() {
   if (state.today === now) return; // same day — nothing to do
 
   if (state.today !== null) {
+    // Log yesterday's result in the habit grid
+    const log = { ...(state.habitLog || {}) };
+    log[state.today] = state.todayCompleted;
+    // Prune entries older than 14 days
+    const cutoff = (() => {
+      const d = new Date(now + 'T12:00:00'); d.setDate(d.getDate() - 14);
+      return d.toISOString().split('T')[0];
+    })();
+    Object.keys(log).forEach(k => { if (k < cutoff) delete log[k]; });
+    state.habitLog = log;
+
     // Were we consecutive and did we finish yesterday?
     const wasYesterday = dayBefore(now) === state.today;
     if (wasYesterday && state.todayCompleted) {
@@ -803,8 +858,8 @@ async function nextPage() {
   state.pagesCompletedToday++;
   state.totalPagesRead++;
 
-  // Passively track quota completion (used for Done button feedback & streak)
-  if (!state.todayCompleted && state.pagesCompletedToday >= DAILY_QUOTA) {
+  // Passively track quota completion (used for streak)
+  if (!state.todayCompleted && state.pagesCompletedToday >= quota()) {
     state.todayCompleted = true;
   }
 
@@ -833,43 +888,13 @@ async function prevPage() {
   await renderPage(state.currentPage);
 }
 
-// ── Done button: save position, show contextual toast ────────────────
-function onDoneTap() {
-  state.doneForToday = true;
-  saveState();
-
-  const remaining = DAILY_QUOTA - state.pagesCompletedToday;
-  let msg;
-  if (state.pagesCompletedToday === 0) {
-    msg = `📖 You haven't started yet — ${DAILY_QUOTA} pages is all it takes!`;
-  } else if (remaining > 0) {
-    msg = `📖 ${remaining} more page${remaining > 1 ? 's' : ''} to hit your daily goal`;
-  } else if (state.pagesCompletedToday === DAILY_QUOTA) {
-    msg = `🎉 Daily goal complete! Keep reading if you like`;
-  } else {
-    const bonus = state.pagesCompletedToday - DAILY_QUOTA;
-    msg = `⭐ ${bonus} bonus page${bonus > 1 ? 's' : ''} today — fantastic!`;
-  }
-  showToast(msg);
-  updateUI(); // refresh Done button colour
-}
-
-let _toastTimer = null;
-function showToast(msg) {
-  const t = document.getElementById('statusToast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
-}
-
 async function changeBook() {
   closeStats();
   await pickPDF();
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Zoom
+//  Zoom (buttons + pinch gesture)
 // ═══════════════════════════════════════════════════════════════════
 async function zoomIn() {
   if ((state.zoomIdx ?? ZOOM_DEFAULT_IDX) >= ZOOM_LEVELS.length - 1) return;
@@ -892,18 +917,61 @@ function updateZoomUI() {
   document.getElementById('zoomInBtn').disabled      = idx >= ZOOM_LEVELS.length - 1;
 }
 
+// ── Pinch-to-zoom ─────────────────────────────────────────────────────────────
+(function initPinch() {
+  let startDist = null;
+  let startIdx  = null;
+
+  function dist(t) {
+    const dx = t[0].clientX - t[1].clientX;
+    const dy = t[0].clientY - t[1].clientY;
+    return Math.hypot(dx, dy);
+  }
+
+  const wrap = document.getElementById('canvasWrap');
+
+  wrap.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) {
+      startDist = dist(e.touches);
+      startIdx  = state.zoomIdx ?? ZOOM_DEFAULT_IDX;
+    }
+  }, { passive: true });
+
+  wrap.addEventListener('touchmove', e => {
+    if (e.touches.length !== 2 || startDist === null) return;
+    const ratio = dist(e.touches) / startDist;
+    // Map ratio to a zoom index offset: each 20% spread/pinch = one level
+    const delta = Math.round((ratio - 1) / 0.2);
+    const newIdx = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, startIdx + delta));
+    if (newIdx !== (state.zoomIdx ?? ZOOM_DEFAULT_IDX)) {
+      state.zoomIdx = newIdx;
+      updateZoomUI(); // immediate label feedback while pinching
+    }
+  }, { passive: true });
+
+  wrap.addEventListener('touchend', async e => {
+    if (startDist === null) return;
+    const finalIdx = state.zoomIdx ?? ZOOM_DEFAULT_IDX;
+    startDist = null;
+    startIdx  = null;
+    saveState();
+    await renderPage(state.currentPage); // re-render at new zoom
+  }, { passive: true });
+})();
+
 // ═══════════════════════════════════════════════════════════════════
 //  UI updates
 // ═══════════════════════════════════════════════════════════════════
 function updateUI() {
   const done     = state.todayCompleted;
-  const pct      = Math.min((state.pagesCompletedToday / DAILY_QUOTA) * 100, 100);
-  const extra    = Math.max(0, state.pagesCompletedToday - DAILY_QUOTA);
+  const q        = quota();
+  const pct      = Math.min((state.pagesCompletedToday / q) * 100, 100);
+  const extra    = Math.max(0, state.pagesCompletedToday - q);
 
   // Progress strip
   document.getElementById('progressLabel').textContent = done
     ? `✅ ${state.pagesCompletedToday} pages today` + (extra > 0 ? ` (+${extra} extra)` : '')
-    : `${state.pagesCompletedToday} / ${DAILY_QUOTA} pages today`;
+    : `${state.pagesCompletedToday} / ${q} pages today`;
 
   document.getElementById('pageLabel').textContent =
     `Page ${state.currentPage} of ${state.totalPages}`;
@@ -915,10 +983,6 @@ function updateUI() {
   // Prev / Next arrow buttons
   document.getElementById('prevBtn').disabled = state.currentPage <= state.todayStartPage;
   document.getElementById('nextBtn').disabled = pdfDoc && state.currentPage >= state.totalPages;
-
-  // Done button — green once daily quota is met
-  const doneBtn = document.getElementById('doneBtn');
-  doneBtn.className = 'btn done-btn ' + (state.todayCompleted ? 'btn-success' : 'btn-primary');
 
   // Header
   document.getElementById('streakEl').textContent  = state.streak;
@@ -964,13 +1028,10 @@ function hideAppChrome() {
 // ═══════════════════════════════════════════════════════════════════
 function openStats() {
   const tp   = state.totalPages || 1;
-  // Use furthest progress reached — never goes backward when user scrolls back.
-  // (todayStartPage - 1) = all pages completed before today.
-  // pagesCompletedToday  = pages completed today.
   const done = (state.todayStartPage - 1) + state.pagesCompletedToday;
   const pct  = Math.round((done / tp) * 100);
   const left = tp - done;
-  const days = Math.ceil(left / DAILY_QUOTA);
+  const days = Math.ceil(left / quota());
 
   document.getElementById('statStreak').textContent = state.streak;
   document.getElementById('statTotal').textContent  = state.totalPagesRead;
@@ -978,11 +1039,80 @@ function openStats() {
   document.getElementById('statDays').textContent   = left > 0 ? days : '🎉';
   document.getElementById('bookProgressFill').style.width = pct + '%';
 
+  renderHabitGrid();
+  renderQuotaUI();
+
   document.getElementById('statsModal').classList.add('open');
 }
 
 function closeStats() {
   document.getElementById('statsModal').classList.remove('open');
+}
+
+// ── Quota selector ────────────────────────────────────────────────────────────
+function setQuota(n) {
+  state.dailyQuota = n;
+  saveState();
+  updateUI();       // refresh progress bar with new quota
+  renderQuotaUI();
+}
+
+function renderQuotaUI() {
+  const q = quota();
+  document.querySelectorAll('.quota-btn').forEach(btn => {
+    btn.classList.toggle('active', Number(btn.dataset.q) === q);
+  });
+}
+
+// ── 7-day habit grid ─────────────────────────────────────────────────────────
+function renderHabitGrid() {
+  const grid    = document.getElementById('habitGrid');
+  const nowStr  = today();
+  const labels  = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+  // Build last 7 days (oldest → newest)
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    days.push(d.toISOString().split('T')[0]);
+  }
+
+  grid.innerHTML = days.map(d => {
+    const label = labels[new Date(d + 'T12:00:00').getDay()].slice(0, 1);
+    let dotClass;
+    if (d === nowStr) {
+      dotClass = state.todayCompleted ? 'today-done' : 'today-progress';
+    } else {
+      const logged = state.habitLog && (d in state.habitLog);
+      dotClass = logged ? (state.habitLog[d] ? 'done' : 'missed') : 'missed';
+    }
+    return `<div class="habit-day">
+      <div class="habit-dot ${dotClass}"></div>
+      <div class="habit-label">${label}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Share streak ──────────────────────────────────────────────────────────────
+function shareStreak() {
+  const q     = quota();
+  const fire  = state.streak > 0 ? ' ' + '🔥'.repeat(Math.min(state.streak, 7)) : '';
+  const extra = state.pagesCompletedToday > q
+    ? ` (+${state.pagesCompletedToday - q} bonus today)`
+    : '';
+  const text =
+    `📖 ${state.streak}-day reading streak on Daily Reader!${fire}\n` +
+    `Reading "${state.bookName}" — ${state.totalPagesRead} pages done${extra}.\n` +
+    `Just ${q} pages a day is all it takes 💪\n` +
+    `https://dattathallam.github.io/daily-reader/`;
+
+  if (navigator.share) {
+    navigator.share({ text }).catch(() => {});
+  } else {
+    // Fallback: open WhatsApp web share
+    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
+  }
 }
 
 // Alias used by stats modal button
@@ -1034,8 +1164,8 @@ function scheduleInAppNotif() {
       const completed = state.pagesCompletedToday;
       new Notification('📖 Daily Reading Reminder', {
         body: completed > 0
-          ? `${completed} of 5 pages done — finish strong today!`
-          : "You haven't started today's 5 pages yet. Open Daily Reader!",
+          ? `${completed} of ${quota()} pages done — finish strong today!`
+          : `You haven't started today's ${quota()} pages yet. Open Daily Reader!`,
         icon: './icons/icon-192.png',
         tag: 'daily-reminder',
       });
