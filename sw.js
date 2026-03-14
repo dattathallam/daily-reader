@@ -1,7 +1,8 @@
 // Daily Reader — Service Worker
 // Handles: offline caching, PWA install, 7 PM periodic background reminder
+// CACHE_NAME is bumped by deploy.sh on every push so stale shells get evicted.
 
-const CACHE_NAME = 'daily-reader-v1';
+const CACHE_NAME = 'daily-reader-v20260314091844'; // ← deploy.sh replaces the version tag
 const PDFJS_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
 
 const ASSETS_TO_CACHE = [
@@ -34,24 +35,41 @@ self.addEventListener('activate', event => {
   );
 });
 
-// ─── Fetch: cache-first for shell, network-first for everything else ────────
+// ─── Fetch strategy ─────────────────────────────────────────────────────────
+//  • App shell (index.html, manifest, icons): network-first → cache fallback.
+//    This ensures users always get the latest version when online.
+//  • CDN assets (PDF.js): cache-first — large files that never change.
 self.addEventListener('fetch', event => {
-  // Only handle GET requests
   if (event.request.method !== 'GET') return;
 
-  event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) return cached;
-      return fetch(event.request).then(response => {
-        // Cache PDF.js files dynamically
-        if (event.request.url.includes('pdf.js') || event.request.url.includes('pdf.worker')) {
+  const url = event.request.url;
+  const isPDFjs = url.includes('cdnjs.cloudflare.com');
+
+  if (isPDFjs) {
+    // Cache-first: PDF.js is versioned and never changes
+    event.respondWith(
+      caches.match(event.request).then(cached => {
+        if (cached) return cached;
+        return fetch(event.request).then(response => {
           const clone = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
-        }
-        return response;
-      }).catch(() => cached); // fallback to cached if network fails
-    })
-  );
+          caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
+          return response;
+        });
+      })
+    );
+  } else {
+    // Network-first: always try to get the latest app shell;
+    // fall back to cache so the app still works offline.
+    event.respondWith(
+      fetch(event.request)
+        .then(response => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+  }
 });
 
 // ─── Periodic Background Sync: 7 PM reminder ───────────────────────────────
