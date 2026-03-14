@@ -211,12 +211,16 @@
     /* ── Reading screen ─────────────────────────────────────── */
     #readingScreen { overflow: hidden; }
     #canvasWrap {
-      flex: 1; overflow: auto; overflow-x: auto;
+      flex: 1; overflow: auto;
       background: #111;
-      display: flex; align-items: flex-start; justify-content: center;
+      /* FIX: block layout so canvas can scroll symmetrically left+right when zoomed.
+         flex+justify-content:center clips the left overflow (can't scroll negative). */
       -webkit-overflow-scrolling: touch;
     }
-    #pdfCanvas { display: block; }
+    #pdfCanvas {
+      display: block;
+      margin: 0 auto; /* centers when smaller than container; scrollable both sides when larger */
+    }
     .nav-bar {
       display: flex; align-items: center; gap: 8px; padding: 10px 12px;
       padding-bottom: calc(10px + var(--safe-bottom));
@@ -544,13 +548,19 @@ function handleDayTransition() {
     }
   }
 
-  // Roll over to the new day
-  state.today            = now;
-  state.todayStartPage   = state.currentPage;
+  // FIX: bookmark = highest page completed, not currentPage.
+  // If user navigated back to re-read an earlier page, currentPage is lower
+  // than their actual progress — using it would lose their place.
+  // todayStartPage + pagesCompletedToday always points to the correct next page.
+  const nextBookmark = state.todayStartPage + state.pagesCompletedToday;
+
+  state.today               = now;
+  state.todayStartPage      = nextBookmark;
+  state.currentPage         = nextBookmark;   // start new day at correct page
   state.pagesCompletedToday = 0;
-  state.todayCompleted   = false;
-  state.doneForToday     = false;
-  state.notifiedToday    = false;
+  state.todayCompleted      = false;
+  state.doneForToday        = false;
+  state.notifiedToday       = false;
   saveState();
 }
 
@@ -735,7 +745,17 @@ async function renderPage(pageNum) {
 // ═══════════════════════════════════════════════════════════════════
 async function nextPage() {
   if (rendering) return;
-  if (state.doneForToday) return;
+
+  // FIX: when done for today, still allow navigating WITHIN already-read pages
+  // (so user can go Back then come forward again freely)
+  if (state.doneForToday) {
+    const lastReadPage = state.todayStartPage + state.pagesCompletedToday - 1;
+    if (state.currentPage >= lastReadPage) return; // truly at the end
+    state.currentPage++;
+    saveState();
+    await renderPage(state.currentPage);
+    return;
+  }
 
   // Snapshot whether quota is already done BEFORE incrementing
   const wasAlreadyCompleted = state.todayCompleted;
@@ -791,10 +811,10 @@ async function readOneMore() {
 }
 
 function doneForToday() {
-  // The counters were incremented (next page was "claimed") but the user
-  // declined to read it — roll back so currentPage stays on last read page.
+  // The modal fires BEFORE the next page is shown, so currentPage and
+  // totalPagesRead were incremented optimistically — roll those back.
+  // pagesCompletedToday stays as-is: the user DID complete those pages.
   state.currentPage--;
-  state.pagesCompletedToday--;
   state.totalPagesRead--;
   state.doneForToday = true;
   saveState();
@@ -855,12 +875,14 @@ function updateUI() {
   const prevBtn = document.getElementById('prevBtn');
   prevBtn.disabled = state.currentPage <= state.todayStartPage;
 
-  // Next button
+  // Next button — when done, still enable if user has backed up within today's pages
   const nextBtn = document.getElementById('nextBtn');
   if (state.doneForToday) {
-    nextBtn.textContent  = '✅ Done for Today';
-    nextBtn.className    = 'btn btn-success';
-    nextBtn.disabled     = true;
+    const lastReadPage = state.todayStartPage + state.pagesCompletedToday - 1;
+    const atEnd = state.currentPage >= lastReadPage;
+    nextBtn.textContent = atEnd ? '✅ Done for Today' : 'Next Page →';
+    nextBtn.className   = atEnd ? 'btn btn-success'   : 'btn btn-primary';
+    nextBtn.disabled    = atEnd;
   } else {
     nextBtn.textContent  = 'Next Page →';
     nextBtn.className    = 'btn btn-primary';
