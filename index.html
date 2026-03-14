@@ -300,6 +300,41 @@
     }
     #bookProgressFill { height: 100%; background: var(--success); border-radius: 4px; transition: width .5s ease; }
 
+    /* ── Nav arrow buttons (← →) ───────────────────────────── */
+    .nav-arrow {
+      background: rgba(108,99,255,.12);
+      border: 1px solid rgba(108,99,255,.3);
+      color: var(--accent-light);
+      border-radius: 12px;
+      font-size: 22px;
+      width: 46px; height: 46px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; flex-shrink: 0;
+      transition: opacity .15s, transform .1s;
+      line-height: 1;
+    }
+    .nav-arrow:active { transform: scale(.93); background: rgba(108,99,255,.25); }
+    .nav-arrow:disabled { opacity: .28; pointer-events: none; }
+    .done-btn { flex: 1; }
+
+    /* ── Status toast ────────────────────────────────────────── */
+    #statusToast {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 300;
+      padding: 14px 20px;
+      background: var(--surface2);
+      border-bottom: 2px solid var(--accent);
+      color: var(--text);
+      font-size: 14px; font-weight: 500;
+      text-align: center;
+      transform: translateY(-100%);
+      transition: transform .3s ease;
+      pointer-events: none;
+      safe-area-inset-top: env(safe-area-inset-top, 0px);
+    }
+    #statusToast.show { transform: translateY(0); }
+
     /* ── Misc ───────────────────────────────────────────────── */
     @media (min-width: 520px) {
       .modal-sheet { border-radius: 22px; margin-bottom: 20px; }
@@ -375,7 +410,7 @@
         <canvas id="pdfCanvas"></canvas>
       </div>
       <div class="nav-bar">
-        <button class="btn btn-outline" id="prevBtn" onclick="prevPage()" style="flex:.38">← Back</button>
+        <button class="nav-arrow" id="prevBtn" onclick="prevPage()" aria-label="Previous page">←</button>
 
         <!-- Zoom control -->
         <div class="zoom-pill">
@@ -384,7 +419,9 @@
           <button class="zoom-btn" id="zoomInBtn"  onclick="zoomIn()"  aria-label="Zoom in">+</button>
         </div>
 
-        <button class="btn btn-primary" id="nextBtn" onclick="nextPage()" style="flex:1">Next →</button>
+        <button class="btn btn-primary done-btn" id="doneBtn" onclick="onDoneTap()">Done</button>
+
+        <button class="nav-arrow" id="nextBtn" onclick="nextPage()" aria-label="Next page">→</button>
       </div>
     </div>
 
@@ -403,18 +440,8 @@
   </div><!-- /screens -->
 </div><!-- /app -->
 
-<!-- ── Daily Goal Complete modal ──────────────────────────────────── -->
-<div class="modal-backdrop" id="goalModal">
-  <div class="modal-sheet">
-    <div class="modal-icon" id="goalModalIcon">🎉</div>
-    <div class="modal-title" id="goalModalTitle">Daily Goal Complete!</div>
-    <div class="modal-body" id="goalModalBody">You've read <strong id="goalPagesEl">5</strong> pages today. Want to keep going?</div>
-    <div class="modal-actions">
-      <button class="btn btn-primary" onclick="readOneMore()">📖 Read One More Page</button>
-      <button class="btn btn-ghost"   onclick="doneForToday()">✅ I'm Done for Today</button>
-    </div>
-  </div>
-</div>
+<!-- ── Status toast ───────────────────────────────────────────────── -->
+<div id="statusToast"></div>
 
 <!-- ── Stats modal ────────────────────────────────────────────────── -->
 <div class="modal-backdrop" id="statsModal">
@@ -489,6 +516,7 @@ function blankState() {
     currentPage: 1,
     todayStartPage: 1,
     pagesCompletedToday: 0,
+    highWaterPageToday: 0, // highest page number actually RENDERED today (for free nav)
     todayCompleted: false,
     doneForToday: false,
     totalPagesRead: 0,
@@ -498,7 +526,7 @@ function blankState() {
     totalPages: 0,
     bookName: '',
     notifiedToday: false,
-    zoomIdx: ZOOM_DEFAULT_IDX,  // index into ZOOM_LEVELS
+    zoomIdx: ZOOM_DEFAULT_IDX,
   };
 }
 
@@ -509,7 +537,14 @@ let rendering = false;    // guard against concurrent renders
 function loadState() {
   try {
     const raw = localStorage.getItem(STATE_KEY);
-    return raw ? { ...blankState(), ...JSON.parse(raw) } : blankState();
+    if (!raw) return blankState();
+    const saved = JSON.parse(raw);
+    const s = { ...blankState(), ...saved };
+    // Migration: if highWaterPageToday is missing, derive it from pagesCompletedToday
+    if (!saved.highWaterPageToday) {
+      s.highWaterPageToday = s.todayStartPage + s.pagesCompletedToday - 1;
+    }
+    return s;
   } catch { return blankState(); }
 }
 
@@ -554,13 +589,14 @@ function handleDayTransition() {
   // todayStartPage + pagesCompletedToday always points to the correct next page.
   const nextBookmark = state.todayStartPage + state.pagesCompletedToday;
 
-  state.today               = now;
-  state.todayStartPage      = nextBookmark;
-  state.currentPage         = nextBookmark;   // start new day at correct page
-  state.pagesCompletedToday = 0;
-  state.todayCompleted      = false;
-  state.doneForToday        = false;
-  state.notifiedToday       = false;
+  state.today                = now;
+  state.todayStartPage       = nextBookmark;
+  state.currentPage          = nextBookmark;
+  state.pagesCompletedToday  = 0;
+  state.highWaterPageToday   = nextBookmark - 1; // no pages rendered yet today
+  state.todayCompleted       = false;
+  state.doneForToday         = false;
+  state.notifiedToday        = false;
   saveState();
 }
 
@@ -732,7 +768,13 @@ async function renderPage(pageNum) {
     canvas.style.height = (vp.height / dpr) + 'px';
 
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
-    wrap.scrollTop = 0; // always start at top of each page
+    wrap.scrollTop = 0;
+
+    // Track the highest page actually shown — used for free navigation
+    if (pageNum > (state.highWaterPageToday || 0)) {
+      state.highWaterPageToday = pageNum;
+      saveState();
+    }
   } finally {
     rendering = false;
     hideLoading();
@@ -746,47 +788,34 @@ async function renderPage(pageNum) {
 async function nextPage() {
   if (rendering) return;
 
-  // FIX: when done for today, still allow navigating WITHIN already-read pages
-  // (so user can go Back then come forward again freely)
-  if (state.doneForToday) {
-    const lastReadPage = state.todayStartPage + state.pagesCompletedToday - 1;
-    if (state.currentPage >= lastReadPage) return; // truly at the end
+  // highWaterPageToday = highest page actually RENDERED this session.
+  // FREE NAVIGATION — already-seen page: just move forward, no counter changes.
+  const highWater = state.highWaterPageToday || (state.todayStartPage - 1);
+  if (state.currentPage < highWater) {
     state.currentPage++;
     saveState();
     await renderPage(state.currentPage);
     return;
   }
 
-  // Snapshot whether quota is already done BEFORE incrementing
-  const wasAlreadyCompleted = state.todayCompleted;
-
+  // NEW PAGE — always navigate freely, no modal interruption.
   state.currentPage++;
   state.pagesCompletedToday++;
   state.totalPagesRead++;
+
+  // Passively track quota completion (used for Done button feedback & streak)
+  if (!state.todayCompleted && state.pagesCompletedToday >= DAILY_QUOTA) {
+    state.todayCompleted = true;
+  }
+
   saveState();
 
   // End of book
   if (state.currentPage > state.totalPages) {
-    state.todayCompleted = true;
     state.streak++;
     saveState();
     showScreen('doneScreen');
     hideAppChrome();
-    return;
-  }
-
-  // FIX: show the goal modal BEFORE rendering the next page.
-  // This way the user finishes page N, taps Next, sees the modal asking
-  // "read one more?", and only sees page N+1 if they agree.
-  const justHitQuota = !wasAlreadyCompleted && state.pagesCompletedToday >= DAILY_QUOTA;
-  if (justHitQuota) {
-    state.todayCompleted = true;
-    saveState();
-    openGoalModal(); // don't render yet — wait for user choice
-    return;
-  }
-  if (wasAlreadyCompleted) {
-    openGoalModal(); // each extra page: ask again before showing
     return;
   }
 
@@ -804,22 +833,34 @@ async function prevPage() {
   await renderPage(state.currentPage);
 }
 
-async function readOneMore() {
-  closeGoalModal();
-  // NOW render the next page the user agreed to read
-  await renderPage(state.currentPage);
-}
-
-function doneForToday() {
-  // The modal fires BEFORE the next page is shown, so currentPage and
-  // totalPagesRead were incremented optimistically — roll those back.
-  // pagesCompletedToday stays as-is: the user DID complete those pages.
-  state.currentPage--;
-  state.totalPagesRead--;
+// ── Done button: save position, show contextual toast ────────────────
+function onDoneTap() {
   state.doneForToday = true;
   saveState();
-  closeGoalModal();
-  updateUI();
+
+  const remaining = DAILY_QUOTA - state.pagesCompletedToday;
+  let msg;
+  if (state.pagesCompletedToday === 0) {
+    msg = `📖 You haven't started yet — ${DAILY_QUOTA} pages is all it takes!`;
+  } else if (remaining > 0) {
+    msg = `📖 ${remaining} more page${remaining > 1 ? 's' : ''} to hit your daily goal`;
+  } else if (state.pagesCompletedToday === DAILY_QUOTA) {
+    msg = `🎉 Daily goal complete! Keep reading if you like`;
+  } else {
+    const bonus = state.pagesCompletedToday - DAILY_QUOTA;
+    msg = `⭐ ${bonus} bonus page${bonus > 1 ? 's' : ''} today — fantastic!`;
+  }
+  showToast(msg);
+  updateUI(); // refresh Done button colour
+}
+
+let _toastTimer = null;
+function showToast(msg) {
+  const t = document.getElementById('statusToast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
 }
 
 async function changeBook() {
@@ -871,23 +912,13 @@ function updateUI() {
   fill.style.width = pct + '%';
   fill.classList.toggle('done', done);
 
-  // Prev button
-  const prevBtn = document.getElementById('prevBtn');
-  prevBtn.disabled = state.currentPage <= state.todayStartPage;
+  // Prev / Next arrow buttons
+  document.getElementById('prevBtn').disabled = state.currentPage <= state.todayStartPage;
+  document.getElementById('nextBtn').disabled = pdfDoc && state.currentPage >= state.totalPages;
 
-  // Next button — when done, still enable if user has backed up within today's pages
-  const nextBtn = document.getElementById('nextBtn');
-  if (state.doneForToday) {
-    const lastReadPage = state.todayStartPage + state.pagesCompletedToday - 1;
-    const atEnd = state.currentPage >= lastReadPage;
-    nextBtn.textContent = atEnd ? '✅ Done for Today' : 'Next Page →';
-    nextBtn.className   = atEnd ? 'btn btn-success'   : 'btn btn-primary';
-    nextBtn.disabled    = atEnd;
-  } else {
-    nextBtn.textContent  = 'Next Page →';
-    nextBtn.className    = 'btn btn-primary';
-    nextBtn.disabled     = false;
-  }
+  // Done button — green once daily quota is met
+  const doneBtn = document.getElementById('doneBtn');
+  doneBtn.className = 'btn done-btn ' + (state.todayCompleted ? 'btn-success' : 'btn-primary');
 
   // Header
   document.getElementById('streakEl').textContent  = state.streak;
@@ -926,23 +957,6 @@ function showAppChrome() {
 
 function hideAppChrome() {
   document.getElementById('progressStrip').classList.remove('visible');
-}
-
-// ═══════════════════════════════════════════════════════════════════
-//  Goal modal
-// ═══════════════════════════════════════════════════════════════════
-function openGoalModal() {
-  const extra = Math.max(0, state.pagesCompletedToday - DAILY_QUOTA);
-  const isExtra = extra > 0;
-
-  document.getElementById('goalModalIcon').textContent  = isExtra ? '⭐' : '🎉';
-  document.getElementById('goalModalTitle').textContent = isExtra ? 'Impressive!' : 'Daily Goal Complete!';
-  document.getElementById('goalPagesEl').textContent    = state.pagesCompletedToday;
-  document.getElementById('goalModal').classList.add('open');
-}
-
-function closeGoalModal() {
-  document.getElementById('goalModal').classList.remove('open');
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1105,10 +1119,7 @@ function showSetupWithContinue() {
   openBtn.textContent = '📂 Open Different PDF';
 }
 
-// Close modals when tapping the backdrop
-document.getElementById('goalModal').addEventListener('click', e => {
-  if (e.target === document.getElementById('goalModal')) closeGoalModal();
-});
+// Close stats modal when tapping the backdrop
 document.getElementById('statsModal').addEventListener('click', e => {
   if (e.target === document.getElementById('statsModal')) closeStats();
 });
